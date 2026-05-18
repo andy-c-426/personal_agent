@@ -10,7 +10,7 @@ class KBMetadata:
         self._embedder = Embedder()
 
     @property
-    def collection(self):
+    def collection(self) -> chromadb.Collection:
         if self._collection is None:
             self._collection = self.client.get_or_create_collection(
                 self.collection_name,
@@ -41,7 +41,7 @@ class KBMetadata:
         return output
 
     def list_documents(self) -> list[dict]:
-        all_data = self.collection.get()
+        all_data = self.collection.get(include=["metadatas"])
         seen = {}
         docs = []
         if all_data["metadatas"]:
@@ -53,6 +53,8 @@ class KBMetadata:
         return docs
 
     def remove_document(self, source_path: str) -> int:
+        if not source_path:
+            return 0
         existing = self.collection.get(where={"source": source_path})
         if existing["ids"]:
             self.collection.delete(ids=existing["ids"])
