@@ -1,7 +1,23 @@
 import hashlib
+import logging
+import re
 import time
 from pathlib import Path
 from dataclasses import dataclass
+
+from personal_agent.kb.embed import Embedder
+
+
+logger = logging.getLogger(__name__)
+
+_embedder: Embedder | None = None
+
+
+def _get_embedder() -> Embedder:
+    global _embedder
+    if _embedder is None:
+        _embedder = Embedder()
+    return _embedder
 
 
 @dataclass
@@ -49,6 +65,17 @@ def chunk_text(
         para = para.strip()
         if not para:
             continue
+
+        # Handle single paragraphs that exceed chunk_size
+        if len(para) / 4 > chunk_size:
+            if current:
+                chunks.append(Chunk(text=current.strip(), metadata={**meta, "chunk_index": len(chunks)}))
+                current = ""
+            sub_chunks = _split_oversized(para, chunk_size)
+            for sub in sub_chunks:
+                chunks.append(Chunk(text=sub, metadata={**meta, "chunk_index": len(chunks)}))
+            continue
+
         # Rough token estimate: chars / 4
         if len(current) / 4 + len(para) / 4 > chunk_size and current:
             chunks.append(Chunk(text=current.strip(), metadata={**meta, "chunk_index": len(chunks)}))
@@ -66,6 +93,45 @@ def chunk_text(
     return chunks
 
 
+def _split_oversized(text: str, chunk_size: int) -> list[str]:
+    """Split text that exceeds chunk_size into smaller pieces.
+
+    First attempts to split by sentence boundaries, then groups sentences
+    into chunk_size-sized groups. Falls back to character-level splitting
+    for text without sentence breaks or for individual oversized sentences.
+    """
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+
+    # If sentence splitting didn't break up the text, split by characters
+    if len(sentences) <= 1:
+        char_limit = chunk_size * 4
+        return [text[i : i + char_limit] for i in range(0, len(text), char_limit) if text[i : i + char_limit]]
+
+    result = []
+    buf = ""
+    for s in sentences:
+        # A single sentence that is itself oversized -- flush buf, then char-split the sentence
+        if len(s) / 4 > chunk_size:
+            if buf:
+                result.append(buf.strip())
+                buf = ""
+            char_limit = chunk_size * 4
+            for i in range(0, len(s), char_limit):
+                result.append(s[i : i + char_limit])
+            continue
+
+        if len(buf) / 4 + len(s) / 4 > chunk_size and buf:
+            result.append(buf.strip())
+            buf = s
+        else:
+            buf = (buf + " " + s).strip()
+
+    if buf:
+        result.append(buf.strip())
+
+    return result
+
+
 def _file_hash(file_path: Path) -> str:
     return hashlib.md5(file_path.read_bytes()).hexdigest()
 
@@ -81,7 +147,8 @@ def ingest_file(file_path: Path, collection) -> list[str]:
     _delete_existing(file_path, collection)
 
     text, meta = parse_file(file_path)
-    meta["file_hash"] = _file_hash(file_path)
+    file_hash = _file_hash(file_path)
+    meta["file_hash"] = file_hash
     chunks = chunk_text(text, source_meta=meta)
 
     if not chunks:
@@ -92,11 +159,10 @@ def ingest_file(file_path: Path, collection) -> list[str]:
     metadatas = []
     embeddings = []
 
-    from personal_agent.kb.embed import Embedder
-    embedder = Embedder()
+    embedder = _get_embedder()
 
     for c in chunks:
-        chunk_id = f"{file_path.stem}_{c.metadata['chunk_index']}_{_file_hash(file_path)[:8]}_{time.time_ns()}"
+        chunk_id = f"{file_path.stem}_{c.metadata['chunk_index']}_{file_hash[:8]}_{time.time_ns()}"
         ids.append(chunk_id)
         documents.append(c.text)
         metadatas.append(c.metadata)
@@ -106,14 +172,17 @@ def ingest_file(file_path: Path, collection) -> list[str]:
     return ids
 
 
-def ingest_directory(dir_path: Path, collection) -> list[str]:
+def ingest_directory(dir_path: Path, collection) -> tuple[list[str], list[str]]:
     dir_path = Path(dir_path)
     all_ids = []
+    errors = []
     for p in dir_path.rglob("*"):
         if p.is_file() and not p.name.startswith("."):
             try:
                 ids = ingest_file(p, collection)
                 all_ids.extend(ids)
-            except Exception:
-                continue
-    return all_ids
+            except Exception as e:
+                msg = f"Failed to ingest {p}: {e}"
+                logger.warning(msg)
+                errors.append(msg)
+    return all_ids, errors

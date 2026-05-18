@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from personal_agent.kb.ingest import parse_file, chunk_text, ingest_file, ingest_directory
 
 
@@ -42,12 +44,16 @@ def test_ingest_file_to_chroma(temp_dir, sample_md_file):
 
 def test_ingest_directory_to_chroma(temp_dir):
     import chromadb
+    import tempfile
     (temp_dir / "a.md").write_text("# Doc A\nContent A")
     (temp_dir / "b.txt").write_text("Content B")
-    client = chromadb.PersistentClient(path=str(temp_dir / "chroma2"))
-    collection = client.get_or_create_collection("test_kb2", embedding_function=_dummy_ef())
-    ids = ingest_directory(temp_dir, collection)
-    assert len(ids) >= 2
+    # Use a chroma dir outside temp_dir so rglob doesn't pick up binary db files
+    with tempfile.TemporaryDirectory() as chroma_dir:
+        client = chromadb.PersistentClient(path=str(Path(chroma_dir) / "chroma2"))
+        collection = client.get_or_create_collection("test_kb2", embedding_function=_dummy_ef())
+        ids, errors = ingest_directory(temp_dir, collection)
+        assert len(ids) >= 2
+        assert len(errors) == 0
 
 
 def test_reingest_replaces_chunks(temp_dir, sample_md_file):
