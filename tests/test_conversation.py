@@ -36,7 +36,7 @@ def test_trim_to_fit_recent():
     for i in range(50):
         conv.add_message("user", f"message {i}")
     conv.trim_to_fit(20)
-    assert len(conv.messages) >= 20
+    assert len(conv.messages) == 20
     assert conv.messages[0].content != "message 0"
 
 

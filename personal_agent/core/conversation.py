@@ -3,6 +3,8 @@ import tiktoken
 from dataclasses import dataclass, field
 from typing import Any
 
+_ENCODING = tiktoken.get_encoding("cl100k_base")
+
 
 @dataclass
 class Message:
@@ -14,11 +16,10 @@ class Message:
 
     @property
     def token_count(self) -> int:
-        enc = tiktoken.get_encoding("cl100k_base")
         text = self.content or ""
         if self.tool_calls:
             text += json.dumps(self.tool_calls)
-        return len(enc.encode(text))
+        return len(_ENCODING.encode(text))
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"role": self.role, "content": self.content}
