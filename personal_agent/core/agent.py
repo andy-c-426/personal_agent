@@ -72,6 +72,7 @@ class Agent:
                     if same_tool_count >= self.config.max_same_tool_calls:
                         final = f"I've called '{tool_name}' several times without progress. Let me stop and share what I have so far. The last result was: {result[:500]}"
                         conversation.add_message("assistant", final)
+                        self.memory.maybe_compress(conversation)
                         return final, tool_calls_made
             else:
                 text = msg.content or ""
@@ -83,4 +84,5 @@ class Agent:
 
         final = "I've reached the maximum number of tool calls. Here's what I found so far."
         conversation.add_message("assistant", final)
+        self.memory.maybe_compress(conversation)
         return final, tool_calls_made
