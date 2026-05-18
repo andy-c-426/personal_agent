@@ -15,7 +15,7 @@ def test_config_defaults(monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-test")
     cfg = Config.from_env()
     assert cfg.deepseek_model == "deepseek-chat"
-    assert cfg.kb_dir is None
+    assert str(cfg.kb_dir).endswith("/.personal_agent/kb") or str(cfg.kb_dir).endswith("\\.personal_agent\\kb")
     assert cfg.max_tool_iterations == 10
     assert cfg.max_same_tool_calls == 3
 
@@ -32,7 +32,7 @@ def test_config_default_dir():
         cfg = Config.from_env()
         assert str(cfg.agent_dir) == "/tmp/fake-home/.personal_agent"
         assert str(cfg.chroma_dir) == "/tmp/fake-home/.personal_agent/chroma"
-        assert cfg.kb_dir is None
+        assert str(cfg.kb_dir) == "/tmp/fake-home/.personal_agent/kb"
     finally:
         if old_home:
             os.environ["HOME"] = old_home

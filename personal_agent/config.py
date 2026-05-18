@@ -25,8 +25,10 @@ class Config:
         api_key = os.environ.get("DEEPSEEK_API_KEY", "")
         tavily_key = os.environ.get("TAVILY_API_KEY", "")
         agent_dir = Path(os.environ.get("PERSONAL_AGENT_DIR", Path.home() / ".personal_agent"))
+        kb_dir = agent_dir / "kb"
         return cls(
             deepseek_api_key=api_key,
             tavily_api_key=tavily_key,
             agent_dir=agent_dir,
+            kb_dir=kb_dir,
         )
