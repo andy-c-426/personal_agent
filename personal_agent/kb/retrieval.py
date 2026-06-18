@@ -168,10 +168,19 @@ class KBMetadata:
         doc_map = {}
         if results["ids"] and results["documents"]:
             for doc_id, doc_text in zip(results["ids"], results["documents"]):
-                doc_map[doc_id] = doc_text or ""
+                text = doc_text or ""
+                # Truncate long texts to keep cross-encoder memory bounded
+                if len(text) > 3000:
+                    text = text[:3000]
+                doc_map[doc_id] = text
         pairs = [(query, doc_map.get(doc_id, "")) for doc_id in doc_ids]
         reranker = _get_reranker()
-        scores = reranker.predict(pairs).tolist()
+        # Batch to avoid MPS OOM on many long texts
+        all_scores = []
+        for i in range(0, len(pairs), 8):
+            batch = pairs[i:i + 8]
+            all_scores.extend(reranker.predict(batch).tolist())
+        scores = all_scores
         if not isinstance(scores, list):
             scores = [scores]
         scored = list(zip(doc_ids, scores))
