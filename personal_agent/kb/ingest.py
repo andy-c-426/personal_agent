@@ -50,86 +50,118 @@ def parse_file(file_path: Path) -> tuple[str, dict]:
         return file_path.read_text(encoding="utf-8"), meta
 
 
+def _extract_headings(text: str) -> list[tuple[int, int, str]]:
+    """Extract markdown headings. Returns list of (char_position, level, text)."""
+    headings = []
+    for m in re.finditer(r'^(#{1,6})\s+(.+)$', text, re.MULTILINE):
+        level = len(m.group(1))
+        headings.append((m.start(), level, m.group(2).strip()))
+    return headings
+
+
+def _find_nearest_heading(pos: int, headings: list[tuple[int, int, str]]) -> str | None:
+    """Return the nearest heading text that precedes pos, or None."""
+    best = None
+    for h_pos, _level, h_text in headings:
+        if h_pos <= pos:
+            best = h_text
+        else:
+            break
+    return best
+
+
+def _sentences(text: str) -> list[str]:
+    """Split text into sentences using boundary patterns."""
+    raw = re.split(r'(?<=[.!?])\s+', text)
+    return [s.strip() for s in raw if s.strip()]
+
+
+def _token_estimate(text: str) -> int:
+    return len(text) // 4
+
+
 def chunk_text(
     text: str,
     chunk_size: int = 500,
     chunk_overlap: int = 50,
     source_meta: dict | None = None,
 ) -> list[Chunk]:
+    """Semantic chunking: sentence-boundary-aware, merges by embedding similarity."""
     meta = source_meta or {}
-    paragraphs = text.split("\n\n")
+    headings = _extract_headings(text)
+    sentences = _sentences(text)
+    if not sentences:
+        return []
+
+    embedder = _get_embedder()
+
+    # Encode each sentence for similarity checking
+    sent_embeddings = embedder.embed(sentences)
+
     chunks = []
-    current = ""
+    group = [sentences[0]]
+    group_pos = 0  # char offset of first sentence in current group
 
-    for para in paragraphs:
-        para = para.strip()
-        if not para:
-            continue
+    # Pre-compute absolute character positions for each sentence in the original text
+    char_positions = []
+    search_start = 0
+    for s in sentences:
+        pos = text.find(s, search_start)
+        if pos == -1:
+            pos = search_start
+        char_positions.append(pos)
+        search_start = pos + len(s)
 
-        # Handle single paragraphs that exceed chunk_size
-        if len(para) / 4 > chunk_size:
-            if current:
-                chunks.append(Chunk(text=current.strip(), metadata={**meta, "chunk_index": len(chunks)}))
-                current = ""
-            sub_chunks = _split_oversized(para, chunk_size)
-            for sub in sub_chunks:
-                chunks.append(Chunk(text=sub, metadata={**meta, "chunk_index": len(chunks)}))
-            continue
+    for i in range(1, len(sentences)):
+        current_sent = sentences[i]
+        combined_tokens = _token_estimate(" ".join(group))
 
-        # Rough token estimate: chars / 4
-        if len(current) / 4 + len(para) / 4 > chunk_size and current:
-            chunks.append(Chunk(text=current.strip(), metadata={**meta, "chunk_index": len(chunks)}))
-            overlap_chars = chunk_overlap * 4
-            if len(current) > overlap_chars:
-                current = current[-overlap_chars:] + "\n\n" + para
-            else:
-                current = para
+        # Compute cosine similarity between group centroid and next sentence
+        group_emb = embedder.embed(" ".join(group))[0]
+        next_emb = sent_embeddings[i]
+
+        dot = sum(a * b for a, b in zip(group_emb, next_emb))
+        norm_a = sum(a * a for a in group_emb) ** 0.5
+        norm_b = sum(b * b for b in next_emb) ** 0.5
+        sim = dot / (norm_a * norm_b) if norm_a > 0 and norm_b > 0 else 0.0
+
+        # Determine threshold: tighter when approaching max chunk size
+        if combined_tokens < 256:
+            threshold = 0.5
+        elif combined_tokens > 1024:
+            threshold = 0.9  # Force split
         else:
-            current = (current + "\n\n" + para).strip()
+            threshold = 0.5
 
-    if current.strip():
-        chunks.append(Chunk(text=current.strip(), metadata={**meta, "chunk_index": len(chunks)}))
+        if sim >= threshold and combined_tokens < 1024:
+            group.append(current_sent)
+        else:
+            # Flush current group
+            chunk_text_str = " ".join(group)
+            chunk_meta = {**meta, "chunk_index": len(chunks)}
+            heading = _find_nearest_heading(char_positions[group_pos], headings)
+            if heading:
+                chunk_meta["heading"] = heading
+            chunks.append(Chunk(text=chunk_text_str, metadata=chunk_meta))
+
+            # Start new group with overlap
+            if chunk_overlap > 0 and len(group) > 1:
+                group = group[-1:] + [current_sent]
+                group_pos = i - 1
+            else:
+                group = [current_sent]
+                group_pos = i
+
+    # Flush final group
+    if group:
+        chunk_text_str = " ".join(group)
+        chunk_meta = {**meta, "chunk_index": len(chunks)}
+        heading = _find_nearest_heading(char_positions[group_pos], headings)
+        if heading:
+            chunk_meta["heading"] = heading
+        chunks.append(Chunk(text=chunk_text_str, metadata=chunk_meta))
 
     return chunks
-
-
-def _split_oversized(text: str, chunk_size: int) -> list[str]:
-    """Split text that exceeds chunk_size into smaller pieces.
-
-    First attempts to split by sentence boundaries, then groups sentences
-    into chunk_size-sized groups. Falls back to character-level splitting
-    for text without sentence breaks or for individual oversized sentences.
-    """
-    sentences = re.split(r"(?<=[.!?])\s+", text)
-
-    # If sentence splitting didn't break up the text, split by characters
-    if len(sentences) <= 1:
-        char_limit = chunk_size * 4
-        return [text[i : i + char_limit] for i in range(0, len(text), char_limit) if text[i : i + char_limit]]
-
-    result = []
-    buf = ""
-    for s in sentences:
-        # A single sentence that is itself oversized -- flush buf, then char-split the sentence
-        if len(s) / 4 > chunk_size:
-            if buf:
-                result.append(buf.strip())
-                buf = ""
-            char_limit = chunk_size * 4
-            for i in range(0, len(s), char_limit):
-                result.append(s[i : i + char_limit])
-            continue
-
-        if len(buf) / 4 + len(s) / 4 > chunk_size and buf:
-            result.append(buf.strip())
-            buf = s
-        else:
-            buf = (buf + " " + s).strip()
-
-    if buf:
-        result.append(buf.strip())
-
-    return result
 
 
 def _file_hash(file_path: Path) -> str:
