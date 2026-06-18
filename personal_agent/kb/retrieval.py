@@ -270,3 +270,46 @@ class _ChromaEmbeddingAdapter:
 
     def name(self) -> str:
         return "BAAI/bge-m3"
+
+
+def check_and_migrate_kb(chroma_dir: str, kb_dir: str | None) -> bool:
+    """Check if existing KB needs migration (old 384-dim -> new 1024-dim).
+    Returns True if a migration was performed.
+    """
+    import shutil
+
+    chroma_dir_path = Path(chroma_dir)
+    if not chroma_dir_path.exists():
+        return False
+
+    client = chromadb.PersistentClient(path=str(chroma_dir_path))
+    try:
+        collection = client.get_collection("kb")
+    except Exception:
+        return False
+
+    if collection.count() == 0:
+        return False
+
+    sample = collection.get(limit=1, include=["embeddings"])
+    if not sample["embeddings"] or not sample["embeddings"][0]:
+        return False
+
+    dim = len(sample["embeddings"][0])
+    if dim == 1024:
+        return False  # Already migrated
+
+    logger.warning("KB collection uses %s-dim embeddings (now 1024). Rebuilding index.", dim)
+    client.delete_collection("kb")
+
+    if kb_dir:
+        kb_path = Path(kb_dir).expanduser()
+        if kb_path.exists():
+            retriever = KBMetadata(client, collection_name="kb")
+            from personal_agent.kb.ingest import ingest_directory
+            _, errors = ingest_directory(kb_path, retriever.collection)
+            for err in errors:
+                logger.warning(err)
+            logger.info("KB migration complete: %d documents re-indexed", retriever.document_count)
+            return True
+    return False

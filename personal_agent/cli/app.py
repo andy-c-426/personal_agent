@@ -106,6 +106,10 @@ def run(config: Config) -> None:
     if config.kb_dir:
         config.kb_dir.mkdir(parents=True, exist_ok=True)
 
+    # Check and migrate KB from old dimension to new (384 -> 1024)
+    from personal_agent.kb.retrieval import check_and_migrate_kb
+    check_and_migrate_kb(str(config.chroma_dir), str(config.kb_dir) if config.kb_dir else None)
+
     # Setup storage
     chroma_client = chromadb.PersistentClient(path=str(config.chroma_dir))
     retriever = KBMetadata(chroma_client, collection_name="kb")
