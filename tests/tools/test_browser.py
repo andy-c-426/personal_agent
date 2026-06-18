@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch, PropertyMock
 
 from personal_agent.tools.browser import (
     BrowserSession,
+    _is_internal_url,
     browser_search,
     browser_navigate,
     browser_get_content,
@@ -422,6 +423,41 @@ class TestBrowserToolFunctions:
         result = browser_navigate("example.com", session=mock_session)
 
         mock_session.navigate.assert_called_once_with("https://example.com")
+
+    # SSRF protection tests
+
+    @pytest.mark.parametrize("url,blocked", [
+        ("http://localhost:8080/admin", True),
+        ("http://127.0.0.1:3000", True),
+        ("http://10.0.0.1/api", True),
+        ("http://172.16.0.1", True),
+        ("http://192.168.1.1", True),
+        ("http://169.254.169.254/latest/meta-data", True),
+        ("http://metadata.google.internal", True),
+        ("http://0.0.0.0:8000", True),
+        ("http://[::1]:8080", True),
+        ("http://myapp.local/admin", True),
+        ("https://example.com", False),
+        ("https://google.com/search?q=test", False),
+        ("http://151.101.1.1", False),
+    ])
+    def test_is_internal_url(self, url, blocked):
+        assert _is_internal_url(url) == blocked
+
+    def test_browser_navigate_blocks_internal_urls(self):
+        mock_session = MagicMock()
+        result = browser_navigate("http://localhost:8080/admin", session=mock_session)
+        mock_session.navigate.assert_not_called()
+        data = json.loads(result)
+        assert "error" in data
+        assert "internal" in data["error"].lower()
+
+    def test_browser_navigate_allows_external_urls(self):
+        mock_session = MagicMock()
+        mock_session.navigate.return_value = "External page"
+        result = browser_navigate("https://example.com", session=mock_session)
+        mock_session.navigate.assert_called_once()
+        assert result == "External page"
 
     def test_browser_navigate_preserves_existing_https(self):
         mock_session = MagicMock()

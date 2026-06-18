@@ -1,7 +1,9 @@
+import ipaddress
 import json
 import logging
 import re
 import time
+from urllib.parse import urlparse
 
 from playwright.sync_api import sync_playwright
 
@@ -271,10 +273,39 @@ def browser_search(query: str, session: BrowserSession) -> str:
     return session.google_search(query)
 
 
+_BLOCKED_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "[::1]", "metadata.google.internal"}
+
+_BLOCKED_NETS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("169.254.0.0/16"),
+]
+
+
+def _is_internal_url(url: str) -> bool:
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+    if not hostname:
+        return True  # block unparseable hosts
+    if hostname in _BLOCKED_HOSTS or hostname.endswith(".local"):
+        return True
+    try:
+        addr = ipaddress.ip_address(hostname)
+        if addr.is_loopback or addr.is_unspecified:
+            return True
+        return any(addr in net for net in _BLOCKED_NETS)
+    except ValueError:
+        pass
+    return False
+
+
 def browser_navigate(url: str, session: BrowserSession) -> str:
     """Navigate to a URL and return the page content."""
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
+    if _is_internal_url(url):
+        return json.dumps({"error": "Navigation to internal/private hosts is blocked."})
     return session.navigate(url)
 
 
