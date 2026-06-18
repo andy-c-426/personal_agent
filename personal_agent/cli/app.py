@@ -112,7 +112,7 @@ def run(config: Config) -> None:
 
     # Setup storage
     chroma_client = chromadb.PersistentClient(path=str(config.chroma_dir))
-    retriever = KBMetadata(chroma_client, collection_name="kb")
+    retriever = KBMetadata(chroma_client, collection_name="kb_main")
 
     # Setup Tavily
     tavily_client = TavilyClient(api_key=config.tavily_api_key)

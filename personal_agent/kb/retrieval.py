@@ -87,7 +87,7 @@ class _SparseIndex:
 
 
 class KBMetadata:
-    def __init__(self, client: chromadb.PersistentClient, collection_name: str = "kb"):
+    def __init__(self, client: chromadb.PersistentClient, collection_name: str = "kb_main"):
         self.client = client
         self.collection_name = collection_name
         self._collection = None
@@ -284,7 +284,7 @@ def check_and_migrate_kb(chroma_dir: str, kb_dir: str | None) -> bool:
 
     client = chromadb.PersistentClient(path=str(chroma_dir_path))
     try:
-        collection = client.get_collection("kb")
+        collection = client.get_collection("kb_main")
     except Exception:
         return False
 
@@ -300,12 +300,12 @@ def check_and_migrate_kb(chroma_dir: str, kb_dir: str | None) -> bool:
         return False  # Already migrated
 
     logger.warning("KB collection uses %s-dim embeddings (now 1024). Rebuilding index.", dim)
-    client.delete_collection("kb")
+    client.delete_collection("kb_main")
 
     if kb_dir:
         kb_path = Path(kb_dir).expanduser()
         if kb_path.exists():
-            retriever = KBMetadata(client, collection_name="kb")
+            retriever = KBMetadata(client, collection_name="kb_main")
             from personal_agent.kb.ingest import ingest_directory
             _, errors = ingest_directory(kb_path, retriever.collection)
             for err in errors:
