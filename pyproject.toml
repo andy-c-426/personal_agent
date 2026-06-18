@@ -10,7 +10,6 @@ readme = "README.md"
 requires-python = "^3.12"
 dependencies = [
     "chromadb (>=1.5.9,<2.0.0)",
-    "sentence-transformers (>=5.5.0,<6.0.0)",
     "prompt-toolkit (>=3.0.52,<4.0.0)",
     "rich (>=15.0.0,<16.0.0)",
     "tavily-python (>=0.7.24,<0.8.0)",
@@ -28,6 +27,11 @@ personal-agent = "personal_agent.main:main"
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
 
 [dependency-groups]
 dev = [
