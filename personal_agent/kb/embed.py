@@ -28,3 +28,10 @@ class Embedder:
             texts = [texts]
         output = self.model.encode(texts, return_dense=False, return_sparse=True)
         return [{str(k): float(v) for k, v in w.items()} for w in output["lexical_weights"]]
+
+    def decode_tokens(self, token_ids: list[int]) -> list[str]:
+        """Decode token IDs to normalized strings for BM25 indexing."""
+        return [
+            self.model.tokenizer.decode([tid]).strip().lower()
+            for tid in token_ids
+        ]

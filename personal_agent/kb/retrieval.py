@@ -1,3 +1,4 @@
+import logging
 import math
 import re
 from collections import defaultdict
@@ -7,6 +8,9 @@ import chromadb
 from sentence_transformers import CrossEncoder
 
 from personal_agent.kb.embed import Embedder
+
+
+logger = logging.getLogger(__name__)
 
 
 _RERANKER_MODEL = "BAAI/bge-reranker-v2-m3"
@@ -121,8 +125,10 @@ class KBMetadata:
         pairs = []
         distances = results.get("distances", [[]])
         for i, doc_id in enumerate(results["ids"][0]):
-            dist = distances[0][i] if distances[0] and i < len(distances[0]) else 0.0
-            score = 1.0 - dist if dist else 1.0
+            if distances[0] and i < len(distances[0]):
+                score = 1.0 - distances[0][i]
+            else:
+                score = 0.5  # Neutral score when distance is unavailable
             pairs.append((doc_id, score))
         return pairs
 
@@ -134,8 +140,8 @@ class KBMetadata:
         if not sparse_output or not sparse_output[0]:
             return []
         token_weights: dict[str, float] = {}
-        for token_id, weight in sparse_output[0].items():
-            token = self._embedder.model.tokenizer.decode([int(token_id)]).strip().lower()
+        for tid_str, weight in sparse_output[0].items():
+            token = self._embedder.decode_tokens([int(tid_str)])[0]
             if token and len(token) > 1:
                 token_weights[token] = weight
         return sparse_index.search(token_weights, top_k=n_results)
