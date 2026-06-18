@@ -280,6 +280,8 @@ _BLOCKED_NETS = [
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
     ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),     # IPv6 unique local
+    ipaddress.ip_network("fe80::/10"),    # IPv6 link-local
 ]
 
 
@@ -292,6 +294,9 @@ def _is_internal_url(url: str) -> bool:
         return True
     try:
         addr = ipaddress.ip_address(hostname)
+        # Unwrap IPv4-mapped IPv6 addresses (e.g. ::ffff:127.0.0.1)
+        if addr.version == 6 and addr.ipv4_mapped:
+            addr = addr.ipv4_mapped
         if addr.is_loopback or addr.is_unspecified:
             return True
         return any(addr in net for net in _BLOCKED_NETS)

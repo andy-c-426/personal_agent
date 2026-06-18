@@ -437,9 +437,20 @@ class TestBrowserToolFunctions:
         ("http://0.0.0.0:8000", True),
         ("http://[::1]:8080", True),
         ("http://myapp.local/admin", True),
+        # IPv4-mapped IPv6 bypass
+        ("http://[::ffff:127.0.0.1]:8080", True),
+        ("http://[::ffff:10.0.0.1]", True),
+        ("http://[::ffff:192.168.1.1]", True),
+        # IPv6 link-local and ULA
+        ("http://[fe80::1]:8080", True),
+        ("http://[fc00::1]", True),
+        ("http://[fd00::1]", True),
+        # External
         ("https://example.com", False),
         ("https://google.com/search?q=test", False),
         ("http://151.101.1.1", False),
+        # Public IPv6
+        ("http://[2606:4700:4700::1111]", False),
     ])
     def test_is_internal_url(self, url, blocked):
         assert _is_internal_url(url) == blocked
