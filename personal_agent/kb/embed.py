@@ -22,9 +22,9 @@ class Embedder:
         output = self.model.encode(texts, return_dense=True, return_sparse=False)
         return output["dense_vecs"].tolist()
 
-    def embed_sparse(self, texts: str | list[str]) -> list[dict[int, float]]:
-        """Return sparse lexical weights (token_id -> weight per text)."""
+    def embed_sparse(self, texts: str | list[str]) -> list[dict[str, float]]:
+        """Return sparse lexical weights (token -> weight per text)."""
         if isinstance(texts, str):
             texts = [texts]
         output = self.model.encode(texts, return_dense=False, return_sparse=True)
-        return output["lexical_weights"]
+        return [{str(k): float(v) for k, v in w.items()} for w in output["lexical_weights"]]

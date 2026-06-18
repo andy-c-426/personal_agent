@@ -31,7 +31,11 @@ def test_embed_sparse_returns_lexical_weights():
     result = embedder.embed_sparse(["hello world", "test sentence"])
     assert len(result) == 2
     assert isinstance(result[0], dict)
-    assert len(result[0]) > 0  # Non-empty sparse weights
+    assert len(result[0]) > 0
+    # Keys should be str, values should be native float
+    for k, v in result[0].items():
+        assert isinstance(k, str)
+        assert isinstance(v, float)
 
 
 def test_embed_sparse_single_string():
@@ -39,3 +43,6 @@ def test_embed_sparse_single_string():
     result = embedder.embed_sparse("hello world")
     assert len(result) == 1
     assert isinstance(result[0], dict)
+    for k, v in result[0].items():
+        assert isinstance(k, str)
+        assert isinstance(v, float)
