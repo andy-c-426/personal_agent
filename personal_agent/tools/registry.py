@@ -1,7 +1,10 @@
 import json
+import logging
 import traceback
 from dataclasses import dataclass
 from typing import Any, Callable
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -45,4 +48,5 @@ class ToolRegistry:
                 return result
             return json.dumps(result, ensure_ascii=False)
         except Exception as e:
-            return json.dumps({"error": str(e), "traceback": traceback.format_exc()})
+            logger.debug("Tool '%s' failed: %s", name, traceback.format_exc())
+            return json.dumps({"error": str(e)})

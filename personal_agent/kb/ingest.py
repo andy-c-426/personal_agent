@@ -78,24 +78,38 @@ _ABBREVIATIONS = {"Mr", "Ms", "Mrs", "Dr", "Prof", "Inc", "Ltd", "Jr", "Sr",
 
 
 def _sentences(text: str) -> list[tuple[str, int]]:
-    """Split text into sentences. Returns list of (sentence, char_position)."""
+    """Split text into sentences. Returns list of (sentence, char_position).
+
+    Handles abbreviations (Dr., U.S., etc.) by merging the fragment with the
+    following text instead of dropping it.
+    """
     pattern = r'(?<=[.!?])\s+'
     parts = re.split(pattern, text)
     result = []
     pos = 0
+    pending = ""
+    pending_start = 0
     for part in parts:
         stripped = part.strip()
         if not stripped:
             pos += len(part) + 1
             continue
-        # Check if this split was on an abbreviation
         tokens = stripped.rsplit(maxsplit=1)
         if tokens and tokens[-1].rstrip('.') in _ABBREVIATIONS:
-            # Merge with next part instead of splitting here
+            if not pending:
+                pending_start = pos
+            pending += stripped + " "
             pos += len(part) + 1
             continue
-        result.append((stripped, pos))
+        if pending:
+            merged = pending + stripped
+            result.append((merged, pending_start))
+            pending = ""
+        else:
+            result.append((stripped, pos))
         pos += len(part) + 1
+    if pending:
+        result.append((pending.strip(), pending_start))
     return result
 
 
@@ -215,7 +229,7 @@ def _delete_existing(file_path: Path, collection):
         collection.delete(ids=existing["ids"])
 
 
-def ingest_file(file_path: Path, collection) -> list[str]:
+def ingest_file(file_path: Path, collection, sparse_index=None) -> list[str]:
     file_path = Path(file_path)
     _delete_existing(file_path, collection)
 
@@ -230,29 +244,34 @@ def ingest_file(file_path: Path, collection) -> list[str]:
     ids = []
     documents = []
     metadatas = []
-    embeddings = []
 
     embedder = _get_embedder()
+    chunk_texts = [c.text for c in chunks]
+    chunk_embeddings = embedder.embed(chunk_texts)
 
     for c in chunks:
         chunk_id = f"{file_path.stem}_{c.metadata['chunk_index']}_{file_hash[:8]}_{time.time_ns()}"
         ids.append(chunk_id)
         documents.append(c.text)
         metadatas.append(c.metadata)
-        embeddings.append(embedder.embed(c.text)[0])
 
-    collection.add(ids=ids, documents=documents, metadatas=metadatas, embeddings=embeddings)
+    collection.add(ids=ids, documents=documents, metadatas=metadatas, embeddings=chunk_embeddings)
+
+    if sparse_index is not None:
+        for chunk_id, doc_text in zip(ids, documents):
+            sparse_index.add(chunk_id, doc_text)
+
     return ids
 
 
-def ingest_directory(dir_path: Path, collection) -> tuple[list[str], list[str]]:
+def ingest_directory(dir_path: Path, collection, sparse_index=None) -> tuple[list[str], list[str]]:
     dir_path = Path(dir_path)
     all_ids = []
     errors = []
     for p in dir_path.rglob("*"):
         if p.is_file() and not p.name.startswith("."):
             try:
-                ids = ingest_file(p, collection)
+                ids = ingest_file(p, collection, sparse_index=sparse_index)
                 all_ids.extend(ids)
             except Exception as e:
                 msg = f"Failed to ingest {p}: {e}"

@@ -12,18 +12,23 @@ class Agent:
         client: OpenAI,
         tool_registry: ToolRegistry,
         memory_manager: MemoryManager | None = None,
+        memory_store=None,
         kb_doc_count: int = 0,
     ):
         self.config = config
         self.client = client
         self.registry = tool_registry
         self.memory = memory_manager or MemoryManager(config)
+        self.memory_store = memory_store
         self.kb_doc_count = kb_doc_count
 
     def run(self, user_input: str, conversation: Conversation) -> tuple[str, list[dict]]:
         conversation.add_message("user", user_input)
 
-        system_prompt = self.memory.build_system_prompt(self.kb_doc_count, conversation)
+        system_prompt = self.memory.build_system_prompt(
+            self.kb_doc_count, conversation,
+            memory_store=self.memory_store,
+        )
 
         tool_calls_made = []
         same_tool_count = 0

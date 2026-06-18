@@ -1,4 +1,5 @@
 import chromadb
+import pytest
 from chromadb.api.types import EmbeddingFunction
 from personal_agent.kb.retrieval import KBMetadata, rewrite_query
 from unittest.mock import MagicMock, patch
@@ -71,12 +72,14 @@ def test_sparse_index_builds_on_search(temp_dir):
     assert retriever._sparse_index is not None
 
 
+@pytest.mark.slow
 def test_reranker_loads():
     from personal_agent.kb.retrieval import _get_reranker
     reranker = _get_reranker()
     assert reranker is not None
 
 
+@pytest.mark.slow
 def test_rerank_scores_pairs():
     from personal_agent.kb.retrieval import _get_reranker
     reranker = _get_reranker()

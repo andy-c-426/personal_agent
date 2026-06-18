@@ -64,17 +64,23 @@ class MemoryManager:
         conversation.messages = system_msgs + recent
         return summary
 
-    def build_system_prompt(self, kb_doc_count: int, conversation: Conversation) -> str:
+    def build_system_prompt(self, kb_doc_count: int, conversation: Conversation, memory_store=None) -> str:
         summary_block = ""
         if conversation.summary:
             summary_block = f"\nConversation summary: {conversation.summary}\n"
+
+        memory_block = ""
+        if memory_store and memory_store.count() > 0:
+            memory_block = "\n" + memory_store.format_for_prompt() + "\n"
 
         return f"""You are a personal assistant with access to a local knowledge base and web search.
 
 Knowledge base: {kb_doc_count} documents indexed. Use kb_search to find relevant local information.
 Web search: Use web_search when you need information not in the knowledge base.
-{summary_block}
+{summary_block}{memory_block}
 When answering:
 - Prefer knowledge base results over web search when available
 - Cite your sources (document name or URL)
-- If both sources are used, distinguish between them"""
+- If both sources are used, distinguish between them
+
+You can use memory_add to remember facts and preferences for future conversations."""

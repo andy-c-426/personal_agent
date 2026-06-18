@@ -187,16 +187,21 @@ class KBMetadata:
         scored.sort(key=lambda x: x[1], reverse=True)
         return [doc_id for doc_id, _ in scored[:top_k]]
 
-    def search(self, query: str, n_results: int = 5) -> list[dict]:
+    def search(self, query: str, n_results: int = 5, use_reranker: bool = True) -> list[dict]:
         dense_results = self._dense_search(query, n_results=20)
         sparse_results = self._sparse_search(query, n_results=20)
         merged_ids = self._rrf_fuse(dense_results, sparse_results, top_k=20)
-        reranked_ids = self._rerank(query, merged_ids, top_k=n_results)
-        if not reranked_ids:
+
+        if use_reranker:
+            final_ids = self._rerank(query, merged_ids, top_k=n_results)
+        else:
+            final_ids = merged_ids[:n_results]
+
+        if not final_ids:
             return []
-        results = self.collection.get(ids=reranked_ids, include=["documents", "metadatas"])
+        results = self.collection.get(ids=final_ids, include=["documents", "metadatas"])
         output = []
-        for doc_id in reranked_ids:
+        for doc_id in final_ids:
             idx = results["ids"].index(doc_id) if doc_id in results["ids"] else -1
             if idx < 0:
                 continue
@@ -208,8 +213,31 @@ class KBMetadata:
                 "text": results["documents"][idx] if results["documents"] else "",
                 "source": meta.get("source", ""),
                 "filename": meta.get("filename", ""),
+                "heading": meta.get("heading", ""),
+                "chunk_index": meta.get("chunk_index", 0),
             })
         return output
+
+    def search_debug(self, query: str, n_results: int = 5, use_reranker: bool = True) -> dict:
+        """Return full retrieval pipeline details for debugging."""
+        dense_results = self._dense_search(query, n_results=20)
+        sparse_results = self._sparse_search(query, n_results=20)
+        merged_ids = self._rrf_fuse(dense_results, sparse_results, top_k=20)
+
+        if use_reranker:
+            final_ids = self._rerank(query, merged_ids, top_k=n_results)
+        else:
+            final_ids = merged_ids[:n_results]
+
+        return {
+            "query": query,
+            "dense": [{"id": did, "score": round(s, 4)} for did, s in dense_results],
+            "sparse": [{"id": did, "score": round(s, 4)} for did, s in sparse_results],
+            "fused_ids": merged_ids,
+            "final_ids": final_ids,
+            "reranker_enabled": use_reranker,
+            "n_results": n_results,
+        }
 
     def list_documents(self) -> list[dict]:
         all_data = self.collection.get(include=["metadatas"])
@@ -236,8 +264,7 @@ class KBMetadata:
         return 0
 
     def add_to_sparse_index(self, doc_id: str, text: str) -> None:
-        if self._sparse_index is not None:
-            self._sparse_index.add(doc_id, text)
+        self._ensure_sparse_index().add(doc_id, text)
 
 
 def rewrite_query(query: str, client, model: str = "deepseek-chat") -> str:
@@ -284,9 +311,10 @@ class _ChromaEmbeddingAdapter:
 def check_and_migrate_kb(chroma_dir: str, kb_dir: str | None) -> bool:
     """Check if existing KB needs migration (old 384-dim -> new 1024-dim).
     Returns True if a migration was performed.
-    """
-    import shutil
 
+    Builds into a temp collection first and only deletes the old collection
+    after confirming the rebuild produced documents, avoiding data loss.
+    """
     chroma_dir_path = Path(chroma_dir)
     if not chroma_dir_path.exists():
         return False
@@ -309,16 +337,45 @@ def check_and_migrate_kb(chroma_dir: str, kb_dir: str | None) -> bool:
         return False  # Already migrated
 
     logger.warning("KB collection uses %s-dim embeddings (now 1024). Rebuilding index.", dim)
-    client.delete_collection("kb_main")
 
-    if kb_dir:
-        kb_path = Path(kb_dir).expanduser()
-        if kb_path.exists():
-            retriever = KBMetadata(client, collection_name="kb_main")
-            from personal_agent.kb.ingest import ingest_directory
-            _, errors = ingest_directory(kb_path, retriever.collection)
-            for err in errors:
-                logger.warning(err)
-            logger.info("KB migration complete: %d documents re-indexed", retriever.document_count)
-            return True
-    return False
+    if not kb_dir:
+        return False
+
+    kb_path = Path(kb_dir).expanduser()
+    if not kb_path.exists():
+        logger.warning("kb_dir does not exist (%s), keeping old collection to avoid data loss", kb_dir)
+        return False
+
+    # Build into a temp collection first — only delete old on success
+    temp_name = "kb_migration_temp"
+    try:
+        client.delete_collection(temp_name)
+    except Exception:
+        pass
+
+    embedder = Embedder()
+    temp_collection = client.get_or_create_collection(
+        temp_name,
+        embedding_function=_ChromaEmbeddingAdapter(embedder),
+    )
+
+    from personal_agent.kb.ingest import ingest_directory
+    _, errors = ingest_directory(kb_path, temp_collection)
+    for err in errors:
+        logger.warning(err)
+
+    if temp_collection.count() == 0:
+        logger.warning("Migration rebuild produced 0 documents, keeping old collection")
+        client.delete_collection(temp_name)
+        return False
+
+    # Rebuild succeeded — swap
+    client.delete_collection("kb_main")
+    retriever = KBMetadata(client, collection_name="kb_main")
+    _, errors = ingest_directory(kb_path, retriever.collection)
+    for err in errors:
+        logger.warning(err)
+    client.delete_collection(temp_name)
+
+    logger.info("KB migration complete: %d documents re-indexed", retriever.document_count)
+    return True

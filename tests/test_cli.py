@@ -1,5 +1,5 @@
-from unittest.mock import MagicMock, patch
-from personal_agent.cli.app import _handle_slash_command, _setup_tools
+from unittest.mock import MagicMock
+from personal_agent.cli.app import _handle_slash_command, _setup_tools, AppContext
 from personal_agent.kb.retrieval import KBMetadata
 from personal_agent.tools.registry import ToolRegistry
 
@@ -13,28 +13,38 @@ class FakeConfig:
     kb_dir = MagicMock()
 
 
-def test_handle_slash_help():
+def _make_ctx():
     retriever = MagicMock(spec=KBMetadata)
-    result = _handle_slash_command("help", "", retriever, FakeConfig())
-    assert result is True  # Continue
+    agent = MagicMock()
+    ctx = MagicMock(spec=AppContext)
+    ctx.config = FakeConfig()
+    ctx.retriever = retriever
+    ctx.agent = agent
+    return ctx
+
+
+def test_handle_slash_help():
+    ctx = _make_ctx()
+    result = _handle_slash_command("help", "", ctx)
+    assert result is True
 
 
 def test_handle_slash_quit():
-    retriever = MagicMock(spec=KBMetadata)
-    result = _handle_slash_command("quit", "", retriever, FakeConfig())
-    assert result is False  # Exit
+    ctx = _make_ctx()
+    result = _handle_slash_command("quit", "", ctx)
+    assert result is False
 
 
 def test_handle_slash_exit():
-    retriever = MagicMock(spec=KBMetadata)
-    result = _handle_slash_command("exit", "", retriever, FakeConfig())
+    ctx = _make_ctx()
+    result = _handle_slash_command("exit", "", ctx)
     assert result is False
 
 
 def test_handle_slash_unknown():
-    retriever = MagicMock(spec=KBMetadata)
-    result = _handle_slash_command("unknown", "", retriever, FakeConfig())
-    assert result is True  # Continue, shows error
+    ctx = _make_ctx()
+    result = _handle_slash_command("unknown", "", ctx)
+    assert result is True
 
 
 def test_setup_tools():
