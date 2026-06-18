@@ -292,7 +292,7 @@ def check_and_migrate_kb(chroma_dir: str, kb_dir: str | None) -> bool:
         return False
 
     sample = collection.get(limit=1, include=["embeddings"])
-    if not sample["embeddings"] or not sample["embeddings"][0]:
+    if len(sample["embeddings"]) == 0 or len(sample["embeddings"][0]) == 0:
         return False
 
     dim = len(sample["embeddings"][0])
