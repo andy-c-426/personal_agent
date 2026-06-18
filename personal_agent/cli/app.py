@@ -19,12 +19,13 @@ import chromadb
 from tavily import TavilyClient
 
 
-def _setup_tools(retriever: KBMetadata, tavily_client: TavilyClient) -> ToolRegistry:
+def _setup_tools(retriever: KBMetadata, tavily_client: TavilyClient, config=None, llm_client=None) -> ToolRegistry:
+    model = config.deepseek_model if config else "deepseek-chat"
     registry = ToolRegistry()
     registry.register(Tool(
         name="kb_search",
         description="Search the local knowledge base for relevant information.",
-        function=lambda query: kb_search(query, retriever=retriever),
+        function=lambda query: kb_search(query, retriever=retriever, llm_client=llm_client, model=model),
         parameters={
             "type": "object",
             "properties": {"query": {"type": "string", "description": "Search query"}},
@@ -112,14 +113,14 @@ def run(config: Config) -> None:
     # Setup Tavily
     tavily_client = TavilyClient(api_key=config.tavily_api_key)
 
-    # Setup tools
-    registry = _setup_tools(retriever, tavily_client)
-
     # Setup model client
     llm_client = OpenAI(
         api_key=config.deepseek_api_key,
         base_url=config.deepseek_base_url,
     )
+
+    # Setup tools
+    registry = _setup_tools(retriever, tavily_client, config, llm_client)
 
     # Setup conversation
     conv_path = config.agent_dir / "conversation.json"

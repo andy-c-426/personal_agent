@@ -12,7 +12,7 @@ from chromadb.api.types import EmbeddingFunction
 
 class _DummyEF(EmbeddingFunction):
     def __call__(self, input):
-        return [[0.1] * 384 for _ in input]
+        return [[0.1] * 1024 for _ in input]
 
 
 def _make_retriever(temp_dir, name="test_kbm"):
@@ -89,3 +89,26 @@ def test_kb_remove_document(temp_dir, sample_md_file):
     result = kb_remove(str(sample_md_file), retriever=retriever)
     data = json.loads(result)
     assert data["removed"] > 0
+
+
+def test_kb_search_with_query_rewrite(temp_dir, sample_md_file):
+    from personal_agent.kb.ingest import ingest_file
+    retriever = _make_retriever(temp_dir, "rewrite1")
+    ingest_file(sample_md_file, retriever.collection)
+    mock_client = MagicMock()
+    mock_client.chat.completions.create.return_value = MagicMock(
+        choices=[MagicMock(message=MagicMock(content="expanded test document query"))]
+    )
+    result = kb_search("short query", retriever=retriever, llm_client=mock_client)
+    data = json.loads(result)
+    assert "results" in data
+    assert mock_client.chat.completions.create.called
+
+
+def test_kb_search_without_llm_client_skips_rewrite(temp_dir, sample_md_file):
+    from personal_agent.kb.ingest import ingest_file
+    retriever = _make_retriever(temp_dir, "rewrite2")
+    ingest_file(sample_md_file, retriever.collection)
+    result = kb_search("test document", retriever=retriever)
+    data = json.loads(result)
+    assert "results" in data
