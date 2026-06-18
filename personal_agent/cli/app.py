@@ -2,6 +2,7 @@ from pathlib import Path
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.styles import Style
+from prompt_toolkit.completion import NestedCompleter, PathCompleter
 from openai import OpenAI
 from personal_agent.config import Config
 from personal_agent.core.agent import Agent
@@ -143,8 +144,19 @@ def run(config: Config) -> None:
         kb_doc_count=retriever.document_count,
     )
 
+    commands = {
+        "ingest": PathCompleter(),
+        "kb": {"list": None, "remove": None},
+        "config": None,
+        "help": None,
+        "quit": None,
+        "exit": None,
+    }
+
     history_path = config.agent_dir / ".history"
     session = PromptSession(
+        completer=NestedCompleter.from_nested_dict(commands),
+        complete_while_typing=True,
         history=FileHistory(str(history_path)),
         style=Style.from_dict({"prompt": "bold green"}),
     )
