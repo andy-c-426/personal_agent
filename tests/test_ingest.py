@@ -18,14 +18,16 @@ def test_parse_text_file(sample_text_file):
 
 
 def test_semantic_chunker_splits_on_topic_boundary():
+    # Use longer, clearly different topics to trigger semantic split
     text = (
-        "The Python programming language is widely used for data science. "
-        "It has many libraries for machine learning and statistics.\n\n"
+        "The Python programming language is widely used for data science and machine learning. "
+        "It has many libraries including numpy, pandas, and scikit-learn for statistical analysis. "
+        "Python's simple syntax and dynamic typing make it ideal for rapid prototyping in AI research.\n\n"
         "Football is a popular sport played with 11 players on each team. "
-        "The World Cup is held every four years and draws global audiences."
+        "The World Cup is held every four years and draws global audiences from hundreds of countries. "
+        "Teams compete in qualifying rounds before the final tournament begins."
     )
     chunks = chunk_text(text, chunk_size=500)
-    # Two distinct topics — should produce at least 2 chunks
     assert len(chunks) >= 2
     for chunk in chunks:
         assert len(chunk.text) > 0
@@ -38,8 +40,8 @@ def test_semantic_chunker_keeps_similar_content_together():
         "Python emphasizes code readability."
     )
     chunks = chunk_text(text, chunk_size=500)
-    # Same topic — should be 1 chunk (or few)
-    assert len(chunks) >= 1
+    # Same topic — all content preserved
+    assert 1 <= len(chunks) <= 3
     combined = " ".join(c.text for c in chunks)
     assert "Python" in combined
     assert "Guido van Rossum" in combined

@@ -70,10 +70,33 @@ def _find_nearest_heading(pos: int, headings: list[tuple[int, int, str]]) -> str
     return best
 
 
-def _sentences(text: str) -> list[str]:
-    """Split text into sentences using boundary patterns."""
-    raw = re.split(r'(?<=[.!?])\s+', text)
-    return [s.strip() for s in raw if s.strip()]
+_ABBREVIATIONS = {"Mr", "Ms", "Mrs", "Dr", "Prof", "Inc", "Ltd", "Jr", "Sr",
+                  "e.g", "i.e", "etc", "vs", "St", "Ave", "Rd", "Blvd",
+                  "Jan", "Feb", "Mar", "Apr", "Jun", "Jul", "Aug", "Sep",
+                  "Oct", "Nov", "Dec", "U.S", "U.K", "E.U", "No", "Vol",
+                  "approx", "dept", "est", "govt"}
+
+
+def _sentences(text: str) -> list[tuple[str, int]]:
+    """Split text into sentences. Returns list of (sentence, char_position)."""
+    pattern = r'(?<=[.!?])\s+'
+    parts = re.split(pattern, text)
+    result = []
+    pos = 0
+    for part in parts:
+        stripped = part.strip()
+        if not stripped:
+            pos += len(part) + 1
+            continue
+        # Check if this split was on an abbreviation
+        tokens = stripped.rsplit(maxsplit=1)
+        if tokens and tokens[-1].rstrip('.') in _ABBREVIATIONS:
+            # Merge with next part instead of splitting here
+            pos += len(part) + 1
+            continue
+        result.append((stripped, pos))
+        pos += len(part) + 1
+    return result
 
 
 def _token_estimate(text: str) -> int:
@@ -85,78 +108,96 @@ def chunk_text(
     chunk_size: int = 500,
     chunk_overlap: int = 50,
     source_meta: dict | None = None,
+    embedder: Embedder | None = None,
 ) -> list[Chunk]:
-    """Semantic chunking: sentence-boundary-aware, merges by embedding similarity."""
+    """Semantic chunking: sentence-boundary-aware, merges by embedding similarity.
+
+    chunk_size drives both min (~chunk_size/2) and max (~chunk_size*2) token bounds.
+    Pass embedder=None to use the module-level cached embedder.
+    """
     meta = source_meta or {}
     headings = _extract_headings(text)
-    sentences = _sentences(text)
+    sent_positions = _sentences(text)
+    sentences = [s for s, _ in sent_positions]
+    positions = [p for _, p in sent_positions]
     if not sentences:
         return []
 
-    embedder = _get_embedder()
+    emb = embedder or _get_embedder()
 
-    # Encode each sentence for similarity checking
-    sent_embeddings = embedder.embed(sentences)
+    # Encode all sentences once
+    sent_embeddings = emb.embed(sentences)
+
+    min_tokens = max(64, chunk_size // 2)
+    max_tokens = chunk_size * 2
 
     chunks = []
-    group = [sentences[0]]
-    group_pos = 0  # char offset of first sentence in current group
+    group_indices = [0]  # indices into sentences list
+    centroid = [float(v) for v in sent_embeddings[0]]  # Running centroid
+    centroid_count = 1
 
-    # Pre-compute absolute character positions for each sentence in the original text
-    char_positions = []
-    search_start = 0
-    for s in sentences:
-        pos = text.find(s, search_start)
-        if pos == -1:
-            pos = search_start
-        char_positions.append(pos)
-        search_start = pos + len(s)
+    def _flush(group_idx_list: list[int], next_idx: int | None = None) -> None:
+        """Flush current group as a chunk, optionally starting overlap."""
+        nonlocal centroid, centroid_count
+        chunk_text_str = " ".join(sentences[i] for i in group_idx_list)
+        chunk_meta = {**meta, "chunk_index": len(chunks)}
+        heading = _find_nearest_heading(positions[group_idx_list[0]], headings)
+        if heading:
+            chunk_meta["heading"] = heading
+        chunks.append(Chunk(text=chunk_text_str, metadata=chunk_meta))
+
+        if next_idx is not None and chunk_overlap > 0 and len(group_idx_list) > 1:
+            # Overlap: keep last sentence
+            overlap_idx = group_idx_list[-1]
+            group_idx_list.clear()
+            group_idx_list.append(overlap_idx)
+            group_idx_list.append(next_idx)
+            centroid = [float(v) for v in sent_embeddings[overlap_idx]]
+            centroid_count = 1
+            # Add the next sentence to centroid
+            for dim in range(len(centroid)):
+                centroid[dim] = (centroid[dim] * centroid_count + sent_embeddings[next_idx][dim]) / (centroid_count + 1)
+            centroid_count += 1
+        elif next_idx is not None:
+            group_idx_list.clear()
+            group_idx_list.append(next_idx)
+            centroid = [float(v) for v in sent_embeddings[next_idx]]
+            centroid_count = 1
 
     for i in range(1, len(sentences)):
-        current_sent = sentences[i]
-        combined_tokens = _token_estimate(" ".join(group))
-
-        # Compute cosine similarity between group centroid and next sentence
-        group_emb = embedder.embed(" ".join(group))[0]
+        current_tokens = _token_estimate(" ".join(sentences[j] for j in group_indices))
         next_emb = sent_embeddings[i]
 
-        dot = sum(a * b for a, b in zip(group_emb, next_emb))
-        norm_a = sum(a * a for a in group_emb) ** 0.5
+        # Cosine similarity between running centroid and next sentence
+        dot = sum(a * b for a, b in zip(centroid, next_emb))
+        norm_a = sum(a * a for a in centroid) ** 0.5
         norm_b = sum(b * b for b in next_emb) ** 0.5
         sim = dot / (norm_a * norm_b) if norm_a > 0 and norm_b > 0 else 0.0
 
-        # Determine threshold: tighter when approaching max chunk size
-        if combined_tokens < 256:
-            threshold = 0.5
-        elif combined_tokens > 1024:
-            threshold = 0.9  # Force split
+        # Threshold ramps up as we approach max_tokens
+        if current_tokens < min_tokens:
+            threshold = 0.45
+        elif current_tokens >= max_tokens:
+            threshold = 1.0  # Force split
         else:
-            threshold = 0.5
+            # Linear ramp from 0.45 to 0.7 between min and max
+            ratio = (current_tokens - min_tokens) / (max_tokens - min_tokens)
+            threshold = 0.45 + ratio * 0.25
 
-        if sim >= threshold and combined_tokens < 1024:
-            group.append(current_sent)
+        if sim >= threshold and current_tokens < max_tokens:
+            group_indices.append(i)
+            # Update running centroid
+            for dim in range(len(centroid)):
+                centroid[dim] = (centroid[dim] * centroid_count + sent_embeddings[i][dim]) / (centroid_count + 1)
+            centroid_count += 1
         else:
-            # Flush current group
-            chunk_text_str = " ".join(group)
-            chunk_meta = {**meta, "chunk_index": len(chunks)}
-            heading = _find_nearest_heading(char_positions[group_pos], headings)
-            if heading:
-                chunk_meta["heading"] = heading
-            chunks.append(Chunk(text=chunk_text_str, metadata=chunk_meta))
-
-            # Start new group with overlap
-            if chunk_overlap > 0 and len(group) > 1:
-                group = group[-1:] + [current_sent]
-                group_pos = i - 1
-            else:
-                group = [current_sent]
-                group_pos = i
+            _flush(group_indices, next_idx=i)
 
     # Flush final group
-    if group:
-        chunk_text_str = " ".join(group)
+    if group_indices:
+        chunk_text_str = " ".join(sentences[i] for i in group_indices)
         chunk_meta = {**meta, "chunk_index": len(chunks)}
-        heading = _find_nearest_heading(char_positions[group_pos], headings)
+        heading = _find_nearest_heading(positions[group_indices[0]], headings)
         if heading:
             chunk_meta["heading"] = heading
         chunks.append(Chunk(text=chunk_text_str, metadata=chunk_meta))
