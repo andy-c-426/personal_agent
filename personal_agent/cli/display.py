@@ -44,6 +44,8 @@ def print_help() -> None:
         "  [cyan]/rag top_k <n>[/cyan]     Set number of results\n"
         "  [cyan]/rag reranker on|off[/cyan] Toggle cross-encoder reranker\n"
         "  [cyan]/rag rewrite on|off[/cyan]  Toggle query rewriting\n"
+        "  [cyan]/browser visible[/cyan]    Toggle browser headless/visible mode\n"
+        "  [cyan]/browser close[/cyan]      Close the browser\n"
         "  [cyan]/memory add <text>[/cyan]  Remember a fact or preference\n"
         "  [cyan]/memory list[/cyan]        List remembered items\n"
         "  [cyan]/memory remove <id>[/cyan] Remove a memory\n"

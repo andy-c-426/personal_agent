@@ -21,6 +21,10 @@ from personal_agent.tools.kb_ingest import kb_ingest
 from personal_agent.tools.kb_list import kb_list
 from personal_agent.tools.kb_remove import kb_remove
 from personal_agent.kb.retrieval import KBMetadata, check_and_migrate_kb
+from personal_agent.tools.browser import (
+    BrowserSession, browser_search, browser_navigate, browser_get_content,
+    browser_click, browser_go_back,
+)
 from personal_agent.cli import display
 
 
@@ -42,6 +46,8 @@ class AppContext:
         "use_rewrite": True,
         "debug": False,
     })
+    browser_session: BrowserSession | None = None
+    browser_config: dict = field(default_factory=lambda: {"headless": True})
 
 
 def _setup_tools(
@@ -51,9 +57,11 @@ def _setup_tools(
     llm_client=None,
     rag_config=None,
     memory_store=None,
+    browser_session=None,
 ) -> ToolRegistry:
     model = config.deepseek_model if config else "deepseek-chat"
     rc = rag_config or {}
+    bs = browser_session
 
     registry = ToolRegistry()
     registry.register(Tool(
@@ -120,6 +128,49 @@ def _setup_tools(
                 "required": ["text"],
             },
         ))
+    if bs is not None:
+        registry.register(Tool(
+            name="browser_search",
+            description="Search the web using Google (falls back to DuckDuckGo if blocked). Returns structured results with titles, URLs, and snippets. Use this to find information not in the knowledge base.",
+            function=lambda query: browser_search(query, session=bs),
+            parameters={
+                "type": "object",
+                "properties": {"query": {"type": "string", "description": "Search query"}},
+                "required": ["query"],
+            },
+        ))
+        registry.register(Tool(
+            name="browser_navigate",
+            description="Navigate to a URL and read the page content. Use this after browser_search to read a specific result page in full.",
+            function=lambda url: browser_navigate(url, session=bs),
+            parameters={
+                "type": "object",
+                "properties": {"url": {"type": "string", "description": "Full URL to navigate to"}},
+                "required": ["url"],
+            },
+        ))
+        registry.register(Tool(
+            name="browser_get_content",
+            description="Re-read the current page content. Use this if the page has loaded dynamic content or you need to check for updates.",
+            function=lambda: browser_get_content(session=bs),
+            parameters={"type": "object", "properties": {}},
+        ))
+        registry.register(Tool(
+            name="browser_click",
+            description="Click a link on the current page by its visible text and read the resulting page.",
+            function=lambda link_text: browser_click(link_text, session=bs),
+            parameters={
+                "type": "object",
+                "properties": {"link_text": {"type": "string", "description": "Visible text of the link to click"}},
+                "required": ["link_text"],
+            },
+        ))
+        registry.register(Tool(
+            name="browser_go_back",
+            description="Go back to the previous page in browser history.",
+            function=lambda: browser_go_back(session=bs),
+            parameters={"type": "object", "properties": {}},
+        ))
     return registry
 
 
@@ -153,6 +204,8 @@ def _handle_slash_command(cmd: str, args: str, ctx: AppContext) -> bool:
             _do_ingest(args, ctx)
     elif cmd == "kb":
         _handle_kb(args, ctx)
+    elif cmd == "browser":
+        _handle_browser(args, ctx)
     else:
         display.print_error(f"Unknown command: /{cmd}. Type /help for commands.")
     return True
@@ -264,6 +317,23 @@ def _handle_kb(args: str, ctx: AppContext) -> None:
         display.print_error("Usage: /kb list | /kb remove <id>")
 
 
+def _handle_browser(args: str, ctx: AppContext) -> None:
+    if args == "visible":
+        ctx.browser_config["headless"] = not ctx.browser_config["headless"]
+        if ctx.browser_session:
+            ctx.browser_session.headless = ctx.browser_config["headless"]
+        state = "headless" if ctx.browser_config["headless"] else "visible"
+        display.console.print(f"Browser mode: [bold]{state}[/bold] (applies on next use)")
+    elif args == "close":
+        if ctx.browser_session:
+            ctx.browser_session.close()
+            display.console.print("Browser closed.")
+        else:
+            display.console.print("Browser not running.")
+    else:
+        display.print_error("Usage: /browser [visible|close]")
+
+
 def _do_ingest(path_str: str, ctx: AppContext) -> None:
     from pathlib import Path
     p = Path(path_str).expanduser().resolve()
@@ -309,6 +379,9 @@ def bootstrap(config: Config) -> AppContext:
 
     memory_store = MemoryStore(config.agent_dir / "memory.json")
 
+    browser_session = BrowserSession(headless=True)
+    browser_config = {"headless": True}
+
     rag_config = {
         "top_k": 5,
         "use_reranker": True,
@@ -319,6 +392,7 @@ def bootstrap(config: Config) -> AppContext:
     registry = _setup_tools(
         retriever, tavily_client, config, llm_client,
         rag_config=rag_config, memory_store=memory_store,
+        browser_session=browser_session,
     )
 
     conv_path = config.agent_dir / "conversation.json"
@@ -350,6 +424,8 @@ def bootstrap(config: Config) -> AppContext:
         memory_store=memory_store,
         agent=agent,
         rag_config=rag_config,
+        browser_session=browser_session,
+        browser_config=browser_config,
     )
 
 
@@ -362,6 +438,7 @@ def run(config: Config) -> None:
         "search": None,
         "rag": {"debug": None, "config": None, "top_k": None, "reranker": {"on": None, "off": None}, "rewrite": {"on": None, "off": None}},
         "memory": {"add": None, "list": None, "remove": None},
+        "browser": {"visible": None, "close": None},
         "config": None,
         "help": None,
         "quit": None,
@@ -380,41 +457,44 @@ def run(config: Config) -> None:
 
     conv_path = ctx.config.agent_dir / "conversation.json"
 
-    while True:
-        try:
-            user_input = session.prompt([("class:prompt", "> ")]).strip()
-        except (EOFError, KeyboardInterrupt):
-            display.console.print("\nGoodbye!")
-            break
-
-        if not user_input:
-            continue
-
-        if user_input.startswith("/"):
-            parts = user_input[1:].split(maxsplit=1)
-            cmd = parts[0]
-            args = parts[1] if len(parts) > 1 else ""
-            if not _handle_slash_command(cmd, args, ctx):
+    try:
+        while True:
+            try:
+                user_input = session.prompt([("class:prompt", "> ")]).strip()
+            except (EOFError, KeyboardInterrupt):
+                display.console.print("\nGoodbye!")
                 break
-            continue
 
-        try:
-            response, tool_calls = ctx.agent.run(user_input, ctx.conversation)
+            if not user_input:
+                continue
 
-            if tool_calls:
-                for tc in tool_calls:
-                    result_preview = tc["result"][:120].replace("\n", " ")
-                    display.print_tool_status(tc["name"], result_preview)
+            if user_input.startswith("/"):
+                parts = user_input[1:].split(maxsplit=1)
+                cmd = parts[0]
+                args = parts[1] if len(parts) > 1 else ""
+                if not _handle_slash_command(cmd, args, ctx):
+                    break
+                continue
 
-            display.print_assistant_header()
-            display.stream_markdown(response)
+            try:
+                response, tool_calls = ctx.agent.run(user_input, ctx.conversation)
 
-            ctx.agent.kb_doc_count = ctx.retriever.document_count
+                if tool_calls:
+                    for tc in tool_calls:
+                        result_preview = tc["result"][:120].replace("\n", " ")
+                        display.print_tool_status(tc["name"], result_preview)
 
-            conv_path.write_text(ctx.conversation.to_json())
+                display.print_assistant_header()
+                display.stream_markdown(response)
 
-        except Exception as e:
-            display.print_error(str(e))
+                ctx.agent.kb_doc_count = ctx.retriever.document_count
 
-    conv_path.write_text(ctx.conversation.to_json())
-    display.console.print("Session saved.")
+                conv_path.write_text(ctx.conversation.to_json())
+
+            except Exception as e:
+                display.print_error(str(e))
+    finally:
+        if ctx.browser_session:
+            ctx.browser_session.close()
+        conv_path.write_text(ctx.conversation.to_json())
+        display.console.print("Session saved.")
