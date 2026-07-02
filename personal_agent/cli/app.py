@@ -20,6 +20,7 @@ from personal_agent.tools.web_search import web_search
 from personal_agent.tools.kb_ingest import kb_ingest
 from personal_agent.tools.kb_list import kb_list
 from personal_agent.tools.kb_remove import kb_remove
+from personal_agent.tools.qmc_transform import transform_qmc
 from personal_agent.kb.retrieval import KBMetadata, check_and_migrate_kb
 from personal_agent.tools.browser import (
     BrowserSession, browser_search, browser_navigate, browser_get_content,
@@ -128,6 +129,31 @@ def _setup_tools(
                 "required": ["text"],
             },
         ))
+    registry.register(Tool(
+        name="qmc_transform",
+        description=(
+            "Transform an audio file to Apple Music-compatible M4A format. "
+            "Handles QQ Music encrypted files (.qmcflac, .qmcogg, .qmcmp3, "
+            ".mflac, .mgg) by decrypting then transcoding, and plain audio "
+            "files (.flac, .ogg, .mp3, .wav) by transcoding directly. "
+            "Uses ALAC for lossless, AAC for lossy. Requires ffmpeg."
+        ),
+        function=lambda filepath, output_dir=None: transform_qmc(filepath, output_dir),
+        parameters={
+            "type": "object",
+            "properties": {
+                "filepath": {
+                    "type": "string",
+                    "description": "Path to the QQ Music encrypted audio file.",
+                },
+                "output_dir": {
+                    "type": "string",
+                    "description": "Optional output directory. Defaults to same directory as input.",
+                },
+            },
+            "required": ["filepath"],
+        },
+    ))
     if bs is not None:
         registry.register(Tool(
             name="browser_search",
@@ -206,6 +232,8 @@ def _handle_slash_command(cmd: str, args: str, ctx: AppContext) -> bool:
         _handle_kb(args, ctx)
     elif cmd == "browser":
         _handle_browser(args, ctx)
+    elif cmd == "transform":
+        _handle_transform(args, ctx)
     else:
         display.print_error(f"Unknown command: /{cmd}. Type /help for commands.")
     return True
@@ -334,6 +362,38 @@ def _handle_browser(args: str, ctx: AppContext) -> None:
         display.print_error("Usage: /browser [visible|close]")
 
 
+def _handle_transform(args: str, ctx: AppContext) -> None:
+    import json
+    from pathlib import Path
+
+    if not args:
+        display.print_error("Usage: /transform <filepath> [output_dir]")
+        display.console.print("  Converts audio files to Apple Music M4A format.")
+        display.console.print("  Supported: .qmcflac, .qmcogg, .qmcmp3, .mflac, .mgg, .flac, .ogg, .mp3, .wav")
+        return
+
+    parts = args.strip().split(maxsplit=1)
+    filepath = parts[0]
+    output_dir = parts[1] if len(parts) > 1 else None
+
+    ext = Path(filepath).suffix.lower()
+    supported = {".qmcflac", ".qmcogg", ".qmcmp3", ".mflac", ".mgg", ".flac", ".ogg", ".mp3", ".wav", ".wma"}
+    if ext not in supported:
+        display.print_error(
+            f"Unsupported file type: {ext}. "
+            f"Supported: {', '.join(sorted(supported))}"
+        )
+        return
+
+    display.console.print(f"[dim]Transforming {filepath}...[/dim]")
+    result = json.loads(transform_qmc(filepath, output_dir))
+
+    if result["status"] == "success":
+        display.console.print(f"  [green]Done![/green] [bold]{result['output_path']}[/bold] ({result['format']} → m4a)")
+    else:
+        display.print_error(result["message"])
+
+
 def _do_ingest(path_str: str, ctx: AppContext) -> None:
     from pathlib import Path
     p = Path(path_str).expanduser().resolve()
@@ -434,6 +494,7 @@ def run(config: Config) -> None:
 
     commands = {
         "ingest": PathCompleter(),
+        "transform": PathCompleter(),
         "kb": {"list": None, "remove": None},
         "search": None,
         "rag": {"debug": None, "config": None, "top_k": None, "reranker": {"on": None, "off": None}, "rewrite": {"on": None, "off": None}},
